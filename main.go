@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"sync"
 	"time"
 )
 
@@ -11,13 +12,14 @@ var matrixA, matrixB [][]int
 
 // PopulateMatrix == populates matrix with random ints
 func PopulateMatrix(size int) [][]int {
-	matrix := make([][]int, size)
 	rand.Seed(time.Now().UnixNano())
+	matrix := make([][]int, size)
 	for i := 0; i < size; i++ {
 		for j := 0; j < size; j++ {
 			matrix[i] = append(matrix[i], rand.Intn(10))
 		}
 	}
+
 	return matrix
 }
 
@@ -31,6 +33,7 @@ func PrintMatrix(matrix [][]int, id string) {
 			fmt.Printf("%d ", matrix[i][j])
 		}
 		fmt.Println("\n")
+		time.Sleep(time.Millisecond * 50)
 	}
 }
 
@@ -46,32 +49,35 @@ func CreateEmpty(size int) [][]int {
 	return matrix
 }
 
-func FoxAlgorithm() [][]int {
+func FoxAlgorithm(ch chan [][]int) {
 	var q int //q == sq root of total matrix size/processes
 
 	//bCastA == function which broadcasts aValues each stage to be multiplied with bValues
-	bCastA := func(A [][]int, stage int) [][]int {
-		bCast := CreateEmpty(len(A))
+	bCastA := func(stage int, ch chan [][]int) {
+		bCast := CreateEmpty(len(matrixA))
 
-		for i := 0; i < len(A); i++ {
+		for i := 0; i < len(matrixA); i++ {
 			kBar := (i + stage) % q
-			for j := 0; j < len(A[i]); j++ {
-				bCast[i][j] = A[i][kBar]
+			for j := 0; j < len(matrixA[i]); j++ {
+				bCast[i][j] = matrixA[i][kBar]
 			}
 		}
-		return bCast
+
+		ch <- bCast
 	}
 
 	//bShift == function to shift up rows in matrix b after each stage
-	bShift := func() {
+	bShift := func(ch chan [][]int) {
+		ch <- matrixB
 		shiftB := CreateEmpty(len(matrixB))
+		keys := make([]int, len(matrixB))
+
 		for i := 0; i < len(matrixB); i++ {
 			for j := 0; j < len(matrixB[i]); j++ {
 				shiftB[i][j] = matrixB[i][j]
 			}
 		}
 
-		keys := make([]int, len(matrixB))
 		for i := len(matrixB) - 2; i >= 0; i-- {
 			keys[i] = i + 1
 		}
@@ -82,33 +88,49 @@ func FoxAlgorithm() [][]int {
 	}
 
 	//c == Matrix Multiplication function which returns matrix c
-	c := func() [][]int {
+	c := func(ch chan [][]int) {
 		matrixC := CreateEmpty(len(matrixA))
+
+		//channels to store bValues & broadcasted aValues
+		bs := make(chan [][]int)
+		pr := make(chan [][]int)
+
 		q = int(math.Sqrt(float64(len(matrixA) * len(matrixA[0]))))
 
 		for stage := 0; stage < q; stage++ {
-			process := bCastA(matrixA, stage)
-			for i := 0; i < len(matrixA); i++ {
-				for j := 0; j < len(matrixA[i]); j++ {
-					matrixC[i][j] = matrixC[i][j] + (process[i][j] * matrixB[i][j])
+			go bCastA(stage, pr)
+			go bShift(bs)
+
+			time.Sleep(time.Millisecond * 500)
+			go func() {
+				a := <-pr
+				b := <-bs
+				for i := 0; i < len(matrixA); i++ {
+					for j := 0; j < len(matrixA[i]); j++ {
+						matrixC[i][j] = matrixC[i][j] + (a[i][j] * b[i][j])
+					}
 				}
-			}
-			bShift()
+			}()
 		}
-		return matrixC
+		ch <- matrixC
 	}
 
-	return c()
+	c(ch)
 }
 
 func main() {
-	//var wg sync.WaitGroup
+	matrixA = PopulateMatrix(6)
+	matrixB = PopulateMatrix(6)
 
-	matrixA = PopulateMatrix(4)
-	matrixB = PopulateMatrix(4)
+	var wg sync.WaitGroup
+	fm := make(chan [][]int)
 
 	PrintMatrix(matrixA, "A")
 	PrintMatrix(matrixB, "B")
 
-	PrintMatrix(FoxAlgorithm(), "C(Fox)")
+	wg.Add(1)
+	go FoxAlgorithm(fm)
+	wg.Done()
+
+	PrintMatrix(<-fm, "C(Fox)")
 }
