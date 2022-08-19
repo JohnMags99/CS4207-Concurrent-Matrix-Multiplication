@@ -2,8 +2,10 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"math"
 	"math/rand"
+	"runtime"
 	"sync"
 	"time"
 )
@@ -27,13 +29,16 @@ func PopulateMatrix(size int) [][]int {
 func PrintMatrix(matrix [][]int, id string) {
 	fmt.Println(id)
 
+	//step == length of matrix multiplied by 100 to give goroutines time to execute
+	step := time.Duration(len(matrix)*100) * time.Millisecond
+
 	for i := 0; i < len(matrix); i++ {
 		for j := 0; j < len(matrix[i]); j++ {
 
 			fmt.Printf("%d ", matrix[i][j])
 		}
 		fmt.Println("\n")
-		time.Sleep(time.Millisecond * 50)
+		time.Sleep(step)
 	}
 }
 
@@ -49,11 +54,22 @@ func CreateEmpty(size int) [][]int {
 	return matrix
 }
 
-func FoxAlgorithm(ch chan [][]int) {
+// Track how long algorithms take
+func timeTrack(start time.Time, name string) {
+	elapsed := time.Since(start).Seconds()
+	log.Printf("%s took %0.12f", name, elapsed)
+}
+
+// FoxAlgorithm == Fox's matrix multiplication algorithm
+func FoxAlgorithm(wg *sync.WaitGroup, ch chan [][]int) {
+	defer wg.Done()
+	//defer timeTrack(time.Now(), "Fox")
+
 	var q int //q == sq root of total matrix size/processes
 
 	//bCastA == function which broadcasts aValues each stage to be multiplied with bValues
 	bCastA := func(stage int, ch chan [][]int) {
+		defer wg.Done()
 		bCast := CreateEmpty(len(matrixA))
 
 		for i := 0; i < len(matrixA); i++ {
@@ -68,6 +84,8 @@ func FoxAlgorithm(ch chan [][]int) {
 
 	//bShift == function to shift up rows in matrix b after each stage
 	bShift := func(ch chan [][]int) {
+		defer wg.Done()
+
 		ch <- matrixB
 		shiftB := CreateEmpty(len(matrixB))
 		keys := make([]int, len(matrixB))
@@ -88,7 +106,7 @@ func FoxAlgorithm(ch chan [][]int) {
 	}
 
 	//c == Matrix Multiplication function which returns matrix c
-	c := func(ch chan [][]int) {
+	c := func() [][]int {
 		matrixC := CreateEmpty(len(matrixA))
 
 		//channels to store bValues & broadcasted aValues
@@ -98,11 +116,16 @@ func FoxAlgorithm(ch chan [][]int) {
 		q = int(math.Sqrt(float64(len(matrixA) * len(matrixA[0]))))
 
 		for stage := 0; stage < q; stage++ {
+			wg.Add(1)
 			go bCastA(stage, pr)
+
+			wg.Add(1)
 			go bShift(bs)
 
-			time.Sleep(time.Millisecond * 500)
+			wg.Add(1)
 			go func() {
+				defer wg.Done()
+
 				a := <-pr
 				b := <-bs
 				for i := 0; i < len(matrixA); i++ {
@@ -112,59 +135,74 @@ func FoxAlgorithm(ch chan [][]int) {
 				}
 			}()
 		}
-		ch <- matrixC
+
+		return matrixC
 	}
 
-	c(ch)
+	ch <- c()
 }
 
-func CanonAlgorithm() [][]int {
+// CanonAlgorithm == Cannons Matrix Multiplication Algorithm
+func CanonAlgorithm(wg *sync.WaitGroup, ch chan [][]int) {
+	defer wg.Done()
+	//defer timeTrack(time.Now(), "Cannon")
 
-	AllignMatrices := func() {
+	//AlignMatrices == function which aligns Avalues left by i, and Bvalues up by j
+	AlignMatrices := func() {
 
-		//Allign A values
-		for i := 1; i < len(matrixA); i++ {
-			row := make([]int, len(matrixA[i]))
-			for j := 0; j < len(matrixA[i]); j++ {
-				row[j] = matrixA[i][j]
+		//Align A values
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 1; i < len(matrixA); i++ {
+				row := make([]int, len(matrixA))
+				for j := 0; j < len(matrixA[i]); j++ {
+					row[j] = matrixA[i][j]
+				}
+
+				firstHalf := row[:i]
+				secndHalf := row[i:]
+
+				newRow := []int{}
+				newRow = append(secndHalf, firstHalf...)
+
+				for j := 0; j < len(matrixA); j++ {
+					matrixA[i][j] = newRow[j]
+				}
 			}
+		}()
 
-			firstHalf := row[:i]
-			secndHalf := row[i:]
+		//Align B values
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 1; i < len(matrixB); i++ {
+				collumn := make([]int, len(matrixB))
+				for j := 0; j < len(matrixB[i]); j++ {
+					collumn[j] = matrixB[j][i]
+				}
 
-			newRow := []int{}
-			newRow = append(secndHalf, firstHalf...)
+				firstHalf := collumn[:i]
+				secndHalf := collumn[i:]
 
-			for j := 0; j < len(matrixA[i]); j++ {
-				matrixA[i][j] = newRow[j]
+				newCollumn := []int{}
+				newCollumn = append(secndHalf, firstHalf...)
+
+				for j := 0; j < len(matrixB[i]); j++ {
+					matrixB[j][i] = newCollumn[j]
+				}
 			}
-		}
-
-		//Allign B values
-		for i := 1; i < len(matrixB); i++ {
-			collumn := make([]int, len(matrixB))
-			for j := 0; j < len(matrixB[i]); j++ {
-				collumn[j] = matrixB[j][i]
-			}
-
-			firstHalf := collumn[:i]
-			secndHalf := collumn[i:]
-
-			newCollumn := []int{}
-			newCollumn = append(secndHalf, firstHalf...)
-
-			for j := 0; j < len(matrixB[i]); j++ {
-				matrixB[j][i] = newCollumn[j]
-			}
-		}
+		}()
 
 		//For testing
-		/*PrintMatrix(matrixA, "new A")
-		PrintMatrix(matrixB, "new B")*/
+		//PrintMatrix(matrixA, "new A")
+		//PrintMatrix(matrixB, "new B")
 	}
 
-	//AShift == function to shift AValues left
-	AShift := func() [][]int {
+	//AShift == function to shift AValues left every phase
+	AShift := func(ch chan [][]int) {
+		defer wg.Done()
+
 		shiftA := CreateEmpty(len(matrixA))
 		keys := make([]int, len(matrixB))
 
@@ -178,11 +216,14 @@ func CanonAlgorithm() [][]int {
 			}
 		}
 
-		return shiftA
+		matrixA = shiftA
+		ch <- shiftA
 	}
 
-	//BShift == function to shift BValues up
-	BShift := func() [][]int {
+	//BShift == function to shift BValues up every phase
+	BShift := func(ch chan [][]int) {
+		defer wg.Done()
+
 		shiftB := CreateEmpty(len(matrixB))
 		keys := make([]int, len(matrixB))
 
@@ -194,7 +235,8 @@ func CanonAlgorithm() [][]int {
 			shiftB[i] = matrixB[keys[i]]
 		}
 
-		return shiftB
+		matrixB = shiftB
+		ch <- shiftB
 	}
 
 	//c == Matrix Multiplication function which returns matrix c
@@ -203,39 +245,65 @@ func CanonAlgorithm() [][]int {
 
 		phases := int(math.Sqrt(float64(len(matrixA) * len(matrixA[0]))))
 
-		AllignMatrices()
-		for phase := 0; phase < phases; phase++ {
-			matrixA = AShift()
-			matrixB = BShift()
-			for i := 0; i < len(matrixA); i++ {
-				for j := 0; j < len(matrixA[i]); j++ {
-					matrixC[i][j] = matrixC[i][j] + (matrixA[i][j] * matrixB[i][j])
-				}
-			}
+		ach := make(chan [][]int)
+		bch := make(chan [][]int)
 
+		//Align
+		AlignMatrices()
+		for phase := 0; phase < phases; phase++ {
+
+			wg.Add(1)
+			go AShift(ach)
+
+			wg.Add(1)
+			go BShift(bch)
+
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+
+				a := <-ach
+				b := <-bch
+
+				for i := 0; i < len(matrixA); i++ {
+					for j := 0; j < len(matrixA[i]); j++ {
+						matrixC[i][j] = matrixC[i][j] + (a[i][j] * b[i][j])
+					}
+				}
+			}()
 		}
 		return matrixC
 	}
 
-	return c()
+	ch <- c()
 }
 
 func main() {
+	runtime.GOMAXPROCS(1)
+
 	var wg sync.WaitGroup
 
+	//channels to store result matrix data
 	fm := make(chan [][]int)
-	//cm := make(chan [][]int)
+	cm := make(chan [][]int)
 
-	matrixA = PopulateMatrix(4)
+	matrixA = PopulateMatrix(5)
 	PrintMatrix(matrixA, "A")
 
-	matrixB = PopulateMatrix(4)
+	matrixB = PopulateMatrix(5)
 	PrintMatrix(matrixB, "B")
 
 	wg.Add(1)
-	go FoxAlgorithm(fm)
-	PrintMatrix(<-fm, "C(Fox)")
-	wg.Done()
+	go FoxAlgorithm(&wg, fm)
+	foxMatrix := <-fm
 
-	PrintMatrix(CanonAlgorithm(), "C(Cannon)")
+	wg.Add(1)
+	go CanonAlgorithm(&wg, cm)
+	cannonMatrix := <-cm
+
+	wg.Wait()
+
+	PrintMatrix(foxMatrix, "C(Fox)")
+	PrintMatrix(cannonMatrix, "C(Cannon)")
+
 }
